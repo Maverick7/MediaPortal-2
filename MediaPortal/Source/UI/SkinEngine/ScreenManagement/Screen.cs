@@ -192,7 +192,8 @@ namespace MediaPortal.UI.SkinEngine.ScreenManagement
     protected WeakReference _lastFocusedElement = new WeakReference(null);
 
     protected FrameworkElement _root;
-    protected PointF? _mouseMovePending = null;
+    //protected PointF? _mouseMovePending = null;
+    protected Tuple<RoutedEventArgs, RoutedEvent[]> _pendingRoutedEvent;
     protected PendingScreenEvent _pendingScreenEvent = null;
     protected Animator _animator = new Animator();
     protected IDictionary<Key, KeyAction> _keyBindings = null;
@@ -397,13 +398,19 @@ namespace MediaPortal.UI.SkinEngine.ScreenManagement
       {
         if (pass == RenderPassType.SingleOrFirstPass)
         {
-          if (_mouseMovePending.HasValue)
+          if (_pendingRoutedEvent != null)
+          {
+            var pre = _pendingRoutedEvent;
+            _pendingRoutedEvent = null;
+            HandleRoutedInputEvent(pre.Item1, pre.Item2);
+          }
+          /*if (_mouseMovePending.HasValue)
           {
             float x = _mouseMovePending.Value.X;
             float y = _mouseMovePending.Value.Y;
             _mouseMovePending = null;
             DoHandleMouseMove(x, y);
-          }
+          }*/
           if (_root.IsMeasureInvalid || _root.IsArrangeInvalid)
             _root.UpdateLayoutRoot(new SizeF(SkinWidth, SkinHeight));
           HandleScheduledFocus();
@@ -421,7 +428,7 @@ namespace MediaPortal.UI.SkinEngine.ScreenManagement
         InputManager inputManager = InputManager.Instance;
         inputManager.KeyPreview += HandleKeyPreview;
         inputManager.KeyPressed += HandleKeyPress;
-        inputManager.MouseMoved += HandleMouseMove;
+        //inputManager.MouseMoved += HandleMouseMove;
         inputManager.MouseClicked += HandleMouseClick;
         inputManager.MouseWheeled += HandleMouseWheel;
         inputManager.TouchDown += HandleTouchDown;
@@ -442,7 +449,7 @@ namespace MediaPortal.UI.SkinEngine.ScreenManagement
         InputManager inputManager = InputManager.Instance;
         inputManager.KeyPreview -= HandleKeyPreview;
         inputManager.KeyPressed -= HandleKeyPress;
-        inputManager.MouseMoved -= HandleMouseMove;
+        //inputManager.MouseMoved -= HandleMouseMove;
         inputManager.MouseClicked -= HandleMouseClick;
         inputManager.MouseWheeled -= HandleMouseWheel;
         inputManager.TouchDown -= HandleTouchDown;
@@ -537,17 +544,19 @@ namespace MediaPortal.UI.SkinEngine.ScreenManagement
       IInputManager inputManager = ServiceRegistration.Get<IInputManager>();
       if (inputManager.IsMouseUsed)
       {
-        DoHandleMouseMove(inputManager.MousePosition.X, inputManager.MousePosition.Y);
+        //DoHandleMouseMove(inputManager.MousePosition.X, inputManager.MousePosition.Y);
+        HandleRoutedInputEvent(new MouseEventArgs(Environment.TickCount), new[] { PreviewMouseMoveEvent, MouseMoveEvent });
         return true;
       }
       return false;
     }
 
-    protected void DoHandleMouseMove(float x, float y)
+    /*protected void DoHandleMouseMove(float x, float y)
     {
       try
       {
         lock (_syncObj)
+        {
           if (_root.CanHandleMouseMove() && GraphicsDevice.RenderPass == RenderPassType.SingleOrFirstPass)
           {
             List<FocusCandidate> focusCandidates = new List<FocusCandidate>(10);
@@ -558,12 +567,13 @@ namespace MediaPortal.UI.SkinEngine.ScreenManagement
           }
           else
             _mouseMovePending = new PointF(x, y);
+        }
       }
       catch (Exception e)
       {
         ServiceRegistration.Get<ILogger>().Error("Screen '{0}': Unhandled exception while processing mouse move event", e, _resourceName);
       }
-    }
+    }*/
 
     private void OnWindowSizeChanged(AbstractProperty property, object oldVal)
     {
@@ -626,12 +636,12 @@ namespace MediaPortal.UI.SkinEngine.ScreenManagement
       }
     }
 
-    private void HandleMouseMove(float x, float y)
+    /*private void HandleMouseMove(float x, float y)
     {
       if (!HasInputFocus)
         return;
       DoHandleMouseMove(x, y);
-    }
+    }*/
 
     private void HandleMouseClick(MouseButtons buttons)
     {
@@ -729,33 +739,55 @@ namespace MediaPortal.UI.SkinEngine.ScreenManagement
       {
         lock (_syncObj)
         {
-          UIElement element;
-          //TODO: add specific element selection logic for all RoutedEvent types, fall back is screen
-          if (args is MouseEventArgs)
+          if (_root.CanHandleMouseMove() && GraphicsDevice.RenderPass == RenderPassType.SingleOrFirstPass)
           {
-            // mouse events go to where mouse hovers over
-            var inputManager = ServiceRegistration.Get<IInputManager>();
-            var pt = inputManager.MousePosition;
-            element = _root.InputHitTest(new PointF(pt.X, pt.Y));
-          }
-          else if (args is InputEventArgs)
-          {
-            // all non mouse input events go to focused element
-            element = FocusedElement;
+            if(args is InputEventArgs && !HasInputFocus)
+              return;
+
+            UIElement element;
+
+            //TODO: add specific element selection logic for all RoutedEvent types, fall back is screen
+            if (args is MouseEventArgs)
+            {
+              var inputManager = ServiceRegistration.Get<IInputManager>();
+              var pt = inputManager.MousePosition;
+
+              if (events.Contains(MouseMoveEvent))
+              {
+                // call internal OnMouseMove for focus and IsMouseOver handling
+                List<FocusCandidate> focusCandidates = new List<FocusCandidate>(10);
+                _root.OnMouseMove(pt.X, pt.Y, focusCandidates);
+                focusCandidates.Sort((f1, f2) => Math.Sign(f2.ZIndex - f1.ZIndex)); // Comparer for sorting in descending order - Sort list from biggest Z-Index to lowest Z-Index
+                if (focusCandidates.Select(candidate => candidate.Candidate).FirstOrDefault(candidate => candidate.TrySetFocus(false)) == null)
+                  RemoveCurrentFocus();
+              }
+
+              // mouse events go to where mouse hovers over
+              element = _root.InputHitTest(new PointF(pt.X, pt.Y));
+            }
+            else if (args is InputEventArgs)
+            {
+              // all non mouse input events go to focused element
+              element = FocusedElement;
+            }
+            else
+            {
+              // fall back is screen
+              element = this;
+            }
+
+            if (element != null)
+            {
+              foreach (var routedEvent in events)
+              {
+                args.RoutedEvent = routedEvent;
+                element.RaiseEvent(args);
+              }
+            }
           }
           else
           {
-            // fall back is screen
-            element = this;
-          }
-
-          if (element != null)
-          {
-            foreach (var routedEvent in events)
-            {
-              args.RoutedEvent = routedEvent;
-              element.RaiseEvent(args);
-            }
+            _pendingRoutedEvent = new Tuple<RoutedEventArgs, RoutedEvent[]>(args, events);
           }
         }
       }
@@ -764,7 +796,7 @@ namespace MediaPortal.UI.SkinEngine.ScreenManagement
         ServiceRegistration.Get<ILogger>().Error("Screen '{0}': Unhandled exception while preprocessing mouse down event", e, _resourceName);
       }
     }
-    
+
     public override bool IsInArea(float x, float y)
     {
       return true; // Screens always cover the whole physical area
