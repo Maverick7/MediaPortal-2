@@ -767,7 +767,7 @@ namespace MediaPortal.UI.SkinEngine.Controls.Visuals
 
     #region Keyboard handling
 
-    public override void OnKeyPreview(ref Key key)
+    internal override void OnKeyPreview(ref Key key)
     {
       base.OnKeyPreview(ref key);
       if (!HasFocus)
